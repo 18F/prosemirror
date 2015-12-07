@@ -1,12 +1,8 @@
 import {defineOption} from "../edit"
-import {elt} from "../dom"
-import {Debounced} from "../util/debounce"
+import {elt, insertCSS} from "../dom"
+import {MenuUpdate} from "./update"
 
-import {Menu} from "./menu"
-import {getItems, separatorItem} from "./items"
-
-import insertCSS from "insert-css"
-import "./icons"
+import {Menu, commandGroups} from "./menu"
 
 defineOption("menuBar", false, function(pm, value) {
   if (pm.mod.menuBar) pm.mod.menuBar.detach()
@@ -51,22 +47,17 @@ class MenuBar {
 
     this.menuElt = elt("div", {class: "ProseMirror-menubar-inner"})
     this.wrapper = elt("div", {class: "ProseMirror-menubar"},
-                       // Height-forcing placeholder
-                       elt("div", {class: "ProseMirror-menu", style: "visibility: hidden"},
-                           elt("div", {class: "ProseMirror-menuicon"},
-                               elt("span", {class: "ProseMirror-menuicon ProseMirror-icon-strong"}))),
+                       elt("div", {class: "ProseMirror-menu", style: "visibility: hiffdden; z-index: 100"},
+                           elt("span", {class: "ProseMirror-menuicon"},
+                               elt("div", {class: "ProseMirror-icon"}, "x"))),
                        this.menuElt)
     pm.wrapper.insertBefore(this.wrapper, pm.wrapper.firstChild)
 
+    this.update = new MenuUpdate(pm, "selectionChange change activeStyleChange", () => this.prepareUpdate())
     this.menu = new Menu(pm, new BarDisplay(this.menuElt, () => this.resetMenu()))
-    this.debounced = new Debounced(pm, 100, () => this.update())
-    pm.on("selectionChange", this.updateFunc = () => this.debounced.trigger())
-    pm.on("change", this.updateFunc)
-    pm.on("activeStyleChange", this.updateFunc)
 
-    this.menuItems = config && config.items ||
-      [...getItems("inline"), separatorItem, ...getItems("block"), ...getItems("history")]
-    this.update()
+    this.menuItems = config && config.items || commandGroups(pm, "inline", "block", "history")
+    this.update.force()
 
     this.floating = false
     if (config && config.float) {
@@ -82,20 +73,21 @@ class MenuBar {
   }
 
   detach() {
-    this.debounced.clear()
+    this.update.detach()
     this.wrapper.parentNode.removeChild(this.wrapper)
 
-    this.pm.off("selectionChange", this.updateFunc)
-    this.pm.off("change", this.updateFunc)
-    this.pm.off("activeStyleChange", this.updateFunc)
     if (this.scrollFunc)
       window.removeEventListener("scroll", this.scrollFunc)
   }
 
-  update() {
-    if (!this.menu.active) this.resetMenu()
-    if (this.floating) this.scrollCursorIfNeeded()
+  prepareUpdate() {
+    let scrollCursor = this.prepareScrollCursor()
+    return () => {
+      if (!this.menu.active) this.resetMenu()
+      if (scrollCursor) scrollCursor()
+    }
   }
+
   resetMenu() {
     this.menu.show(this.menuItems)
   }
@@ -117,18 +109,22 @@ class MenuBar {
         this.floating = true
         let menuRect = this.menuElt.getBoundingClientRect()
         this.menuElt.style.left = menuRect.left + "px"
-        this.menuElt.style.width = menuRect.length + "px"
+        this.menuElt.style.width = menuRect.width + "px"
         this.menuElt.style.position = "fixed"
       }
     }
   }
 
-  scrollCursorIfNeeded() {
-    let cursorPos = this.pm.coordsAtPos(this.pm.selection.head)
+  prepareScrollCursor() {
+    if (!this.floating) return null
+    let head = this.pm.selection.head
+    if (!head) return null
+    let cursorPos = this.pm.coordsAtPos(head)
     let menuRect = this.menuElt.getBoundingClientRect()
     if (cursorPos.top < menuRect.bottom && cursorPos.bottom > menuRect.top) {
       let scrollable = findWrappingScrollable(this.pm.wrapper)
-      if (scrollable) scrollable.scrollTop -= (menuRect.bottom - cursorPos.top)
+      if (scrollable)
+        return () => scrollable.scrollTop -= (menuRect.bottom - cursorPos.top)
     }
   }
 }
@@ -140,7 +136,6 @@ function findWrappingScrollable(node) {
 
 insertCSS(`
 .ProseMirror-menubar {
-  padding: 1px 4px;
   position: relative;
   margin-bottom: 3px;
   border-top-left-radius: inherit;
@@ -149,11 +144,12 @@ insertCSS(`
 
 .ProseMirror-menubar-inner {
   color: #666;
-  padding: 1px 4px;
+  padding: 1px 6px;
   top: 0; left: 0; right: 0;
   position: absolute;
   border-bottom: 1px solid silver;
   background: white;
+  z-index: 10;
   -moz-box-sizing: border-box;
   box-sizing: border-box;
   overflow: hidden;
@@ -161,7 +157,7 @@ insertCSS(`
   border-top-right-radius: inherit;
 }
 
-.ProseMirror-menubar .ProseMirror-menuicon-active {
+.ProseMirror-menubar .ProseMirror-icon-active {
   background: #eee;
 }
 
@@ -171,11 +167,18 @@ insertCSS(`
   color: black;
   border: none;
   outline: none;
-  margin: 2px;
+  width: 100%;
+  box-sizing: -moz-border-box;
+  box-sizing: border-box;
 }
 
 .ProseMirror-menubar input[type="text"] {
   padding: 0 4px;
+}
+
+.ProseMirror-menubar form {
+  position: relative;
+  padding: 2px 4px;
 }
 
 .ProseMirror-menubar .ProseMirror-blocktype {
@@ -193,6 +196,8 @@ insertCSS(`
   position: relative;
   left: 100%;
   width: 100%;
+  box-sizing: -moz-border-box;
+  box-sizing: border-box;
   padding-left: 16px;
   background: white;
 }

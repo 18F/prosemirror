@@ -1,5 +1,5 @@
-import {Pos, findDiffStart, findDiffEnd} from "../model"
-import {fromDOM} from "../convert/from_dom"
+import {Pos, findDiffStart, findDiffEnd, siblingRange} from "../model"
+import {fromDOM} from "../parse/dom"
 import {samePathDepth} from "../transform/tree"
 
 import {findByPath} from "./selection"
@@ -21,7 +21,7 @@ function isAtStart(pos, depth) {
 
 function parseNearSelection(pm) {
   let dom = pm.content, node = pm.doc
-  let from = pm.selection.from, to = pm.selection.to
+  let {from, to} = pm.selection
   for (let depth = 0;; depth++) {
     let toNode = node.child(to.path[depth])
     let fromStart = isAtStart(from, depth + 1)
@@ -51,8 +51,10 @@ export function applyDOMChange(pm) {
   let changeStart = findDiffStart(pm.doc, updated)
   if (changeStart) {
     let changeEnd = findDiffEndConstrained(pm.doc, updated, changeStart)
-    pm.apply(pm.tr.replace(changeStart.a, changeEnd.a, updated, changeStart.b, changeEnd.b))
-    pm.operation.fullRedraw = true
+    // Mark nodes touched by this change as 'to be redrawn'
+    pm.markRangeDirty(siblingRange(pm.doc, changeStart.a, changeEnd.a))
+
+    pm.tr.replace(changeStart.a, changeEnd.a, updated, changeStart.b, changeEnd.b).apply()
     return true
   } else {
     return false
@@ -63,7 +65,7 @@ function offsetBy(first, second, pos) {
   let same = samePathDepth(first, second)
   let firstEnd = same == first.depth, secondEnd = same == second.depth
   let off = (secondEnd ? second.offset : second.path[same]) - (firstEnd ? first.offset : first.path[same])
-  let shorter = firstEnd ? pos.shift(off) : pos.shorten(same, off)
+  let shorter = firstEnd ? pos.move(off) : pos.shorten(same, off)
   if (secondEnd) return shorter
   else return shorter.extend(new Pos(second.path.slice(same), second.offset))
 }
@@ -148,7 +150,7 @@ function nodeBefore(node) {
 }
 
 function scanText(start, end) {
-  let text = "", cur = start
+  let text = "", cur = nodeAfter(start)
   for (;;) {
     if (cur == end) return text
     if (!cur) return null

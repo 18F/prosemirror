@@ -6,8 +6,8 @@ import {defTest} from "./tests"
 import xmlDOM from "xmldom"
 
 import {defaultSchema as schema} from "../src/model"
-import {toDOM} from "../src/convert/to_dom"
-import {fromDOM} from "../src/convert/from_dom"
+import {toDOM} from "../src/serialize/dom"
+import {fromDOM} from "../src/parse/dom"
 
 function domFor(str) {
   return (new xmlDOM.DOMParser).parseFromString("<!doctype html><html>" + str + "</html>")
@@ -114,3 +114,19 @@ recover("find_place",
 recover("move_up",
         "<p>hello<hr/>bye</p>",
         doc(p("hello"), hr, p("bye")))
+
+recover("dont_ignore_whitespace",
+        "<p><em>one</em> <strong>two</strong></p>",
+        doc(p(em("one"), " ", strong("two"))))
+
+recover("stray tab",
+        "<p> <b>&#09;</b></p>",
+        doc(p(" ")))
+
+recover("random spaces",
+        "<p><b>1 </b> </p>",
+        doc(p(strong("1 "))))
+
+recover("empty code block",
+        "<pre></pre>",
+        doc(pre()))

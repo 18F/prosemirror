@@ -1,7 +1,10 @@
-import * as style from "./style"
+import {sameStyles} from "./style"
 
 const emptyArray = []
 
+/**
+ * Document node class
+ */
 export class Node {
   constructor(type, attrs) {
     this.type = type
@@ -36,7 +39,7 @@ export class BlockNode extends Node {
   constructor(type, attrs, content, styles) {
     if (styles) throw new Error("Constructing a block node with styles")
     super(type, attrs)
-    this.content = content || (type.contains ? [] : emptyArray)
+    this.content = content || emptyArray
   }
 
   toString() {
@@ -68,19 +71,28 @@ export class BlockNode extends Node {
     return this.replace(pos, this.child(pos).replaceDeep(path, node, depth + 1))
   }
 
-  append(nodes, joinDepth = 0) {
+  append(nodes, joinLeft = 0, joinRight = 0) {
     if (!nodes.length) return this
     if (!this.length) return this.copy(nodes)
 
     let last = this.length - 1, content = this.content.slice(0, last)
     let before = this.content[last], after = nodes[0]
-    if (joinDepth && before.sameMarkup(after)) {
-      content.push(before.append(after.content, joinDepth - 1))
-    } else {
-      content.push(before, after)
-    }
+    if (joinLeft > 0 && joinRight > 0 && before.sameMarkup(after))
+      content.push(before.append(after.content, joinLeft - 1, joinRight - 1))
+    else
+      content.push(before.close(joinLeft - 1, "end"), after.close(joinRight - 1, "start"))
     for (let i = 1; i < nodes.length; i++) content.push(nodes[i])
     return this.copy(content)
+  }
+
+  close(depth, side) {
+    if (depth == 0 && this.length == 0 && !this.type.canBeEmpty)
+      return this.copy(this.type.defaultContent())
+    if (depth < 0) return this
+    let off = side == "start" ? 0 : this.maxOffset - 1, child = this.child(off)
+    let closed = child.close(depth - 1, side)
+    if (closed == child) return this
+    return this.replace(off, closed)
   }
 
   get maxOffset() { return this.length }
@@ -92,8 +104,11 @@ export class BlockNode extends Node {
     return text
   }
 
+  /**
+   * Get the child node at a given index.
+   */
   child(i) {
-    if (i < 0 || i > this.length)
+    if (i < 0 || i >= this.length)
       throw new Error("Index " + i + " out of range in " + this)
     return this.content[i]
   }
@@ -105,6 +120,12 @@ export class BlockNode extends Node {
 
   get children() { return this.content }
 
+  /**
+   * Get a child node given a path.
+   *
+   * @param  {array} path
+   * @return {Node}
+   */
   path(path) {
     for (var i = 0, node = this; i < path.length; node = node.content[path[i]], i++) {}
     return node
@@ -140,9 +161,53 @@ export class BlockNode extends Node {
   }
 
   get isBlock() { return true }
+
+  nodesBetween(from, to, f, path = [], parent = null) {
+    if (f(this, path, from, to, parent) === false) return
+
+    let start, endPartial = to && to.depth > path.length
+    let end = endPartial ? to.path[path.length] : to ? to.offset : this.length
+    if (!from) {
+      start = 0
+    } else if (from.depth == path.length) {
+      start = from.offset
+    } else {
+      start = from.path[path.length] + 1
+      let passTo = null
+      if (endPartial && end == start - 1) {
+        passTo = to
+        endPartial = false
+      }
+      this.enterNode(start - 1, from, passTo, path, f)
+    }
+    for (let i = start; i < end; i++)
+      this.enterNode(i, null, null, path, f)
+    if (endPartial)
+      this.enterNode(end, null, to, path, f)
+  }
+
+  enterNode(index, from, to, path, f) {
+    path.push(index)
+    this.child(index).nodesBetween(from, to, f, path, this)
+    path.pop()
+  }
+
+  inlineNodesBetween(from, to, f) {
+    this.nodesBetween(from, to, (node, path, from, to, parent, offset) => {
+      if (node.isInline)
+        f(node, from ? from.offset : offset, to ? to.offset : offset + node.offset, path, parent)
+    })
+  }
 }
 
 export class TextblockNode extends BlockNode {
+  constructor(type, attrs, content) {
+    super(type, attrs, content)
+    let maxOffset = 0
+    for (let i = 0; i < this.content.length; i++) maxOffset += this.content[i].offset
+    this._maxOffset = maxOffset
+  }
+
   slice(from, to = this.maxOffset) {
     let result = []
     if (from == to) return result
@@ -166,13 +231,44 @@ export class TextblockNode extends BlockNode {
     return this.copy(content)
   }
 
-  get maxOffset() {
-    let sum = 0
-    for (let i = 0; i < this.length; i++) sum += this.child(i).offset
-    return sum
+  close() {
+    return this
   }
 
   get isTextblock() { return true }
+
+  get maxOffset() { return this._maxOffset }
+
+  nodesBetween(from, to, f, path, parent) {
+    if (f(this, path, from, to, parent) === false) return
+    let start = from ? from.offset : 0, end = to ? to.offset : this.maxOffset
+    if (start == end) return
+    for (let offset = 0, i = 0; i < this.length; i++) {
+      let child = this.child(i), endOffset = offset + child.offset
+      if (endOffset >= start)
+        f(child, path, offset < start ? from : null, endOffset > end ? to : null, this, offset)
+      if (endOffset >= end) break
+      offset = endOffset
+    }
+  }
+
+  childBefore(offset) {
+    if (offset == 0) return {node: null, index: 0, innerOffset: 0}
+    for (let i = 0; i < this.length; i++) {
+      let child = this.child(i)
+      offset -= child.offset
+      if (offset <= 0) return {node: child, index: i, innerOffset: offset + child.offset}
+    }
+  }
+
+  childAfter(offset) {
+    for (let i = 0; i < this.length; i++) {
+      let child = this.child(i), size = child.offset
+      if (offset < size) return {node: child, index: i, innerOffset: offset}
+      offset -= size
+    }
+    return {node: null, index: 0, innerOffset: 0}
+  }
 }
 
 export class InlineNode extends Node {
@@ -194,7 +290,7 @@ export class InlineNode extends Node {
 
   toJSON() {
     let obj = super.toJSON()
-    if (this.styles.length) obj.styles = this.styles
+    if (this.styles.length) obj.styles = this.styles.map(s => s.toJSON())
     return obj
   }
 
@@ -205,7 +301,8 @@ export class InlineNode extends Node {
 
 export class TextNode extends InlineNode {
   constructor(type, attrs, content, styles) {
-    if (typeof content != "string") throw new Error("Passing non-string as text node content")
+    if (typeof content != "string" || !content)
+      throw new Error("Text node content must be a non-empty string")
     super(type, attrs, null, styles)
     this.text = content
   }
@@ -215,7 +312,7 @@ export class TextNode extends InlineNode {
   get textContent() { return this.text }
 
   maybeMerge(other) {
-    if (other.type == this.type && style.sameSet(this.styles, other.styles))
+    if (other.type == this.type && sameStyles(this.styles, other.styles))
       return new TextNode(this.type, this.attrs, this.text + other.text, this.styles)
   }
 
@@ -226,7 +323,7 @@ export class TextNode extends InlineNode {
   toString() {
     let text = JSON.stringify(this.text)
     for (let i = 0; i < this.styles.length; i++)
-      text += this.styles[i].type + "(" + text + ")"
+      text = this.styles[i].type.name + "(" + text + ")"
     return text
   }
 
@@ -239,8 +336,15 @@ export class TextNode extends InlineNode {
   get isText() { return true }
 }
 
+function isEmpty(obj) {
+  if (obj) for (let _ in obj) return false
+  return true
+}
+
 export function compareMarkup(typeA, typeB, attrsA, attrsB) {
   if (typeA != typeB) return false
+  if (isEmpty(attrsA)) return isEmpty(attrsB)
+  if (isEmpty(attrsB)) return false
   for (var prop in attrsA)
     if (attrsB[prop] !== attrsA[prop])
       return false

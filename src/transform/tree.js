@@ -31,75 +31,11 @@ export function copyInline(node, from, to, f) {
   return node.copy(copied)
 }
 
-export function forSpansBetween(doc, from, to, f) {
-  let path = []
-  function scan(node, from, to) {
-    if (node.isTextblock) {
-      let startOffset = from ? from.offset : 0
-      let endOffset = to ? to.offset : node.maxOffset
-      for (let i = 0, offset = 0; offset < endOffset; i++) {
-        let child = node.child(i), size = child.offset
-        offset += size
-        if (offset > startOffset)
-          f(child, path, Math.max(offset - child.offset, startOffset), Math.min(offset, endOffset))
-      }
-    } else if (node.length) {
-      let start = from ? from.path[path.length] : 0
-      let end = to ? to.path[path.length] + 1 : node.length
-      for (let i = start; i < end; i++) {
-        path.push(i)
-        scan(node.child(i), i == start && from, i == end - 1 && to)
-        path.pop()
-      }
-    }
-  }
-  scan(doc, from, to)
-}
-
 export function isFlatRange(from, to) {
   if (from.path.length != to.path.length) return false
   for (let i = 0; i < from.path.length; i++)
     if (from.path[i] != to.path[i]) return false
   return from.offset <= to.offset
-}
-
-export function selectedSiblings(doc, from, to) {
-  for (let i = 0, node = doc;; i++) {
-    if (node.isTextblock)
-      return {path: from.path.slice(0, i - 1), from: from.path[i - 1], to: from.path[i - 1] + 1}
-    let fromEnd = i == from.path.length, toEnd = i == to.path.length
-    let left = fromEnd ? from.offset : from.path[i]
-    let right = toEnd ? to.offset : to.path[i]
-    if (fromEnd || toEnd || left != right)
-      return {path: from.path.slice(0, i), from: left, to: right + (toEnd ? 0 : 1)}
-    node = node.child(left)
-  }
-}
-
-export function blocksBetween(doc, from, to, f) {
-  let path = []
-  function scan(node, from, to) {
-    if (node.isTextblock) {
-      f(node, path)
-    } else {
-      let fromMore = from && from.path.length > path.length
-      let toMore = to && to.path.length > path.length
-      let start = !from ? 0 : fromMore ? from.path[path.length] : from.offset
-      let end = !to ? node.length : toMore ? to.path[path.length] + 1 : to.offset
-      for (let i = start; i < end; i++) {
-        path.push(i)
-        scan(node.child(i), fromMore && i == start ? from : null, toMore && i == end - 1 ? to : null)
-        path.pop()
-      }
-    }
-  }
-  scan(doc, from, to)
-}
-
-export function isPlainText(node) {
-  if (node.length == 0) return true
-  let child = node.firstChild
-  return node.length == 1 && child.isText && child.styles.length == 0
 }
 
 function canBeJoined(node, offset, depth) {

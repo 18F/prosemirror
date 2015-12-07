@@ -1,5 +1,5 @@
 import {Pos} from "../model"
-import {toDOM, renderNodeToDOM} from "../convert/to_dom"
+import {toDOM, renderNodeToDOM} from "../serialize/dom"
 
 import {elt} from "../dom"
 
@@ -8,7 +8,7 @@ const nonEditable = {html_block: true, html_tag: true, horizontal_rule: true}
 function options(path, ranges) {
   return {
     onRender(node, dom, offset) {
-      if (node.kind != "inline" && offset != null)
+      if (!node.isInline && offset != null)
         dom.setAttribute("pm-path", offset)
       if (nonEditable.hasOwnProperty(node.type.name))
         dom.contentEditable = false
@@ -98,7 +98,7 @@ export function redraw(pm, dirty, doc, prev) {
 
     if (node.isTextblock) {
       let needsBR = node.length == 0 ||
-          node.lastChild.type == node.type.schema.nodeTypes.hard_break
+          node.lastChild.type == node.type.schema.nodes.hard_break
       let last = dom.lastChild, hasBR = last && last.nodeType == 1 && last.hasAttribute("pm-force-br")
       if (needsBR && !hasBR)
         dom.appendChild(elt("br", {"pm-force-br": "true"}))
@@ -113,7 +113,7 @@ export function redraw(pm, dirty, doc, prev) {
       if (!block) path.push(i)
       let found = inPrev[i]
       let nodeLeft = true
-      if (found > -1) {
+      if (found != null) {
         domPos = deleteNextNodes(dom, domPos, found - j)
         j = found
       } else if (!block && j < prev.length && inNode[j] == null &&

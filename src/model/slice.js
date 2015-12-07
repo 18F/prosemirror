@@ -1,25 +1,51 @@
+import {Pos} from "./pos"
+
+// FIXME move to node methods
+
+export function childrenBefore(node, pos, depth = 0) {
+  if (depth == pos.depth)
+    return node.slice(0, pos.offset)
+
+  let n = pos.path[depth]
+  return node.slice(0, n).concat(sliceBefore(node.child(n), pos, depth + 1))
+}
+
 export function sliceBefore(node, pos, depth = 0) {
-  let content
-  if (depth < pos.depth) {
-    let n = pos.path[depth]
-    content = node.slice(0, n)
-    content.push(sliceBefore(node.child(n), pos, depth + 1))
-  } else {
-    content = node.slice(0, pos.offset)
-  }
-  return node.copy(content)
+  return node.copy(childrenBefore(node, pos, depth))
+}
+
+export function childrenAfter(node, pos, depth = 0) {
+  if (depth == pos.depth)
+    return node.slice(pos.offset)
+  let n = pos.path[depth]
+  let content = node.slice(n + 1)
+  content.unshift(sliceAfter(node.child(n), pos, depth + 1))
+  return content
 }
 
 export function sliceAfter(node, pos, depth = 0) {
-  let content
-  if (depth < pos.depth) {
-    let n = pos.path[depth]
-    content = node.slice(n + 1)
-    content.unshift(sliceAfter(node.child(n), pos, depth + 1))
+  return node.copy(childrenAfter(node, pos, depth))
+}
+
+export function childrenBetween(node, from, to, depth = 0) {
+  let fromEnd = depth == from.depth, toEnd = depth == to.depth
+  if (fromEnd && toEnd)
+    return node.slice(from.offset, to.offset)
+  if (!fromEnd && !toEnd && from.path[depth] == to.path[depth])
+    return [sliceBetween(node.child(from.path[depth]), from, to, false, depth + 1)]
+
+  let content = [], start
+  if (!fromEnd) {
+    start = from.path[depth] + 1
+    content.push(sliceAfter(node.child(start - 1), from, depth + 1))
   } else {
-    content = node.slice(pos.offset)
+    start = from.offset
   }
-  return node.copy(content)
+  let end = toEnd ? to.offset : to.path[depth]
+  let between = node.slice(start, end)
+  for (let i = 0; i < between.length; i++) content.push(between[i])
+  if (!toEnd) content.push(sliceBefore(node.child(end), to, depth + 1))
+  return content
 }
 
 export function sliceBetween(node, from, to, collapse = true, depth = 0) {
@@ -32,24 +58,23 @@ export function sliceBetween(node, from, to, collapse = true, depth = 0) {
     for (let i = conn.length - 1; i >= 0; i--) inner = node.type.schema.node(conn[i], null, [inner])
     return node.copy([inner])
   } else {
-    let content
-    if (depth == from.depth && depth == to.depth && node.isTextblock) {
-      content = node.slice(from.offset, to.offset)
-    } else {
-      content = []
-      let start
-      if (depth < from.depth) {
-        start = from.path[depth] + 1
-        content.push(sliceAfter(node.child(start - 1), from, depth + 1))
-      } else {
-        start = from.offset
-      }
-      let end = depth < to.depth ? to.path[depth] : to.offset
-      let between = node.slice(start, end)
-      for (let i = 0; i < between.length; i++) content.push(between[i])
-      if (depth < to.depth)
-        content.push(sliceBefore(node.child(end), to, depth + 1))
+    return node.copy(childrenBetween(node, from, to, depth))
+  }
+}
+
+export function siblingRange(doc, from, to) {
+  for (let i = 0, node = doc;; i++) {
+    if (node.isTextblock) {
+      let path = from.path.slice(0, i - 1), offset = from.path[i - 1]
+      return {from: new Pos(path, offset), to: new Pos(path, offset + 1)}
     }
-    return node.copy(content)
+    let fromEnd = i == from.path.length, toEnd = i == to.path.length
+    let left = fromEnd ? from.offset : from.path[i]
+    let right = toEnd ? to.offset : to.path[i]
+    if (fromEnd || toEnd || left != right) {
+      let path = from.path.slice(0, i)
+      return {from: new Pos(path, left), to: new Pos(path, right + (toEnd ? 0 : 1))}
+    }
+    node = node.child(left)
   }
 }

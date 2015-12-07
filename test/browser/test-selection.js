@@ -1,7 +1,29 @@
 import {namespace} from "./def"
 import {doc, blockquote, pre, h1, h2, p, li, ol, ul, em, img, strong, code, a, a2, br, hr} from "../build"
-import {cmp, gt, cmpStr, P} from "../cmp"
-import {allPositions} from "../fuzz/pos"
+import {cmp, cmpNode, gt, cmpStr, P} from "../cmp"
+
+import {Pos} from "../../src/model"
+
+function allPositions(doc, block) {
+  let found = [], path = []
+  function scan(node) {
+    let p = path.slice()
+    if (node.isTextblock) {
+      let size = node.maxOffset
+      for (let i = 0; i <= size; i++) found.push(new Pos(p, i))
+    } else if (node.type.contains) {
+      for (let i = 0;; i++) {
+        if (!block) found.push(new Pos(p, i))
+        if (i == node.length) break
+        path.push(i)
+        scan(node.child(i))
+        path.pop()
+      }
+    }
+  }
+  scan(doc)
+  return found
+}
 
 const test = namespace("selection")
 
@@ -26,24 +48,25 @@ function setSel(node, offset) {
 }
 
 test("read", pm => {
-  function test(node, offset, expected) {
+  function test(node, offset, expected, comment) {
     setSel(node, offset)
-    cmpStr(pm.selection.head, expected)
+    pm.sel.pollForUpdate()
+    cmpStr(pm.selection.head, expected, comment)
     pm.flush()
   }
   let one = findTextNode(pm.content, "one")
   let two = findTextNode(pm.content, "two")
-  test(one, 0, P(0, 0))
-  test(one, 1, P(0, 1))
-  test(one, 3, P(0, 3))
-  test(one.parentNode, 0, P(0, 0))
-  test(one.parentNode, 1, P(0, 3))
-  test(two, 0, P(2, 0, 0))
-  test(two, 3, P(2, 0, 3))
-  test(two.parentNode, 1, P(2, 0, 3))
-  test(pm.content, 1, P(0, 3))
-  test(pm.content, 2, P(2, 0, 0))
-  test(pm.content, 3, P(2, 0, 3))
+  test(one, 0, P(0, 0), "force 0:0")
+  test(one, 1, P(0, 1), "force 0:1")
+  test(one, 3, P(0, 3), "force 0:3")
+  test(one.parentNode, 0, P(0, 0), "force :0 from one")
+  test(one.parentNode, 1, P(0, 3), "force :1 from one")
+  test(two, 0, P(2, 0, 0), "force 1:0")
+  test(two, 3, P(2, 0, 3), "force 1:3")
+  test(two.parentNode, 1, P(2, 0, 3), "force :1 from two")
+  test(pm.content, 1, undefined, "force :1")
+  test(pm.content, 2, P(2, 0, 0), "force :2")
+  test(pm.content, 3, P(2, 0, 3), "force :3")
 }, {
   doc: doc(p("one"), hr, blockquote(p("two")))
 })
@@ -91,7 +114,7 @@ test("change_event", pm => {
   cmp(received, 2, "changed back")
   pm.setOption("doc", doc(p("hi")))
   cmp(received, 2, "new doc")
-  pm.apply(pm.tr.insertText(P(0, 2), "you"))
+  pm.tr.insertText(P(0, 2), "you").apply()
   cmp(received, 3, "doc changed")
 }, {doc: doc(p("one"))})
 
@@ -144,15 +167,28 @@ test("coords_round_trip", pm => {
 })
 
 test("follow_change", pm => {
-  pm.apply(pm.tr.insertText(P(0, 0), "xy"))
+  pm.tr.insertText(P(0, 0), "xy").apply()
   cmpStr(pm.selection.head, P(0, 2))
   cmpStr(pm.selection.anchor, P(0, 2))
-  pm.apply(pm.tr.insertText(P(0, 0), "zq"))
+  pm.tr.insertText(P(0, 0), "zq").apply()
   cmpStr(pm.selection.head, P(0, 4))
   cmpStr(pm.selection.anchor, P(0, 4))
-  pm.apply(pm.tr.insertText(P(0, 6), "uv"))
+  pm.tr.insertText(P(0, 6), "uv").apply()
   cmpStr(pm.selection.head, P(0, 4))
   cmpStr(pm.selection.anchor, P(0, 4))
 }, {
   doc: doc(p("hi"))
+})
+
+test("replace_with_block", pm => {
+  pm.setSelection(P(0, 3))
+  pm.tr.replaceSelection(pm.schema.node("horizontal_rule")).apply()
+  cmpNode(pm.doc, doc(p("foo"), hr, p("bar")), "split paragraph")
+  cmpStr(pm.selection.head, P(2, 0), "moved after rule")
+  pm.setSelection(P(2, 3))
+  pm.tr.replaceSelection(pm.schema.node("horizontal_rule")).apply()
+  cmpNode(pm.doc, doc(p("foo"), hr, p("bar"), hr), "inserted after")
+  cmpStr(pm.selection.head, P(2, 3), "stayed in paragraph")
+}, {
+  doc: doc(p("foobar"))
 })

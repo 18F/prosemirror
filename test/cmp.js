@@ -1,5 +1,5 @@
 import {Failure} from "./failure"
-import {style, Pos} from "../src/model"
+import {Pos, sameStyles} from "../src/model"
 
 export function cmpNode(a, b, comment) {
   function raise(msg, path) {
@@ -18,7 +18,7 @@ export function cmpNode(a, b, comment) {
       if (!(name in b.attrs) && a.attrs[name])
         raise("missing attr " + name + " on right", path)
     if (a.text != null && a.text != b.text) raise("different text", path)
-    if (a.styles && !style.sameSet(a.styles, b.styles)) raise("different styles", path)
+    if (a.styles && !sameStyles(a.styles, b.styles)) raise("different styles", path)
     for (var i = 0; i < a.length; i++)
       inner(a.child(i), b.child(i), path + "." + i)
   }
@@ -26,7 +26,7 @@ export function cmpNode(a, b, comment) {
 }
 
 export function cmpStr(a, b, comment) {
-  let as = a.toString(), bs = b.toString()
+  let as = String(a), bs = String(b)
   if (as != bs)
     throw new Failure("expected " + bs + ", got " + as + (comment ? " (" + comment + ")" : ""))
 }

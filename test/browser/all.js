@@ -1,5 +1,6 @@
 import "./test-command"
 import "./test-selection"
+import "./test-node-selection"
 import "./test-keys"
 import "./test-options"
 import "./test-domchange"

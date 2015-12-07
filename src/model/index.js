@@ -1,11 +1,17 @@
 export {compareMarkup} from "./node"
-export {baseSchemaSpec, defaultSchemaSpec, defaultSchema, SchemaSpec, Schema, SchemaError} from "./schema"
+export {removeStyle, sameStyles, containsStyle, spanStylesAt, rangeHasStyle} from "./style"
+
+export {SchemaSpec, Schema, SchemaError,
+        NodeType, Block, Textblock, Inline, Text,
+        StyleType, Attribute} from "./schema"
+export {defaultSchema, Doc, BlockQuote, OrderedList, BulletList, ListItem,
+        HorizontalRule, Paragraph, Heading, CodeBlock, Image, HardBreak,
+        CodeStyle, EmStyle, StrongStyle, LinkStyle} from "./defaultschema"
+
 export {Pos} from "./pos"
 
-import * as style from "./style"
-export {style}
-
-export {sliceBefore, sliceAfter, sliceBetween} from "./slice"
-export {spanAtOrBefore, getSpan, spanStylesAt, rangeHasStyle} from "./inline"
+export {sliceBefore, sliceAfter, sliceBetween,
+        childrenBefore, childrenAfter, childrenBetween,
+        siblingRange} from "./slice"
 
 export {findDiffStart, findDiffEnd} from "./diff"

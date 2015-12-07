@@ -32,7 +32,10 @@ export class Pos {
     return true
   }
 
-  cmp(other) { return Pos.cmp(this.path, this.offset, other.path, other.offset) }
+  cmp(other) {
+    if (other == this) return 0
+    return Pos.cmp(this.path, this.offset, other.path, other.offset)
+  }
 
   static shorten(path, to = null, offset = 0) {
     if (to == null) to = path.length - 1
@@ -44,8 +47,12 @@ export class Pos {
     return Pos.shorten(this.path, to, offset)
   }
 
-  shift(by) {
+  move(by) {
     return new Pos(this.path, this.offset + by)
+  }
+
+  toPath(offset = 0) {
+    return this.path.concat(this.offset + offset)
   }
 
   extend(pos) {
@@ -59,62 +66,10 @@ export class Pos {
 
   toJSON() { return this }
 
+  static from(array, extraOffset = 0) {
+    if (!array.length) throw new Error("Can't create a pos from an empty array")
+    return new Pos(array.slice(0, array.length - 1), array[array.length - 1] + extraOffset)
+  }
+
   static fromJSON(json) { return new Pos(json.path, json.offset) }
-
-  static after(node, pos) { return findAfter(node, pos, []) }
-  static start(node) { return findLeft(node, []) }
-
-  static before(node, pos) { return findBefore(node, pos, []) }
-  static end(node) { return findRight(node, []) }
-
-  static near(node, pos) { return Pos.after(node, pos) || Pos.before(node, pos) }
-}
-
-function findLeft(node, path) {
-  if (node.isTextblock)
-    return new Pos(path, 0)
-  for (let i = 0; i < node.length; i++) {
-    path.push(i)
-    let found = findLeft(node.child(i), path)
-    if (found) return found
-    path.pop()
-  }
-}
-
-function findAfter(node, pos, path) {
-  if (node.isTextblock)
-    return pos
-  let atEnd = path.length == pos.path.length
-  let start = atEnd ? pos.offset : pos.path[path.length]
-  for (let i = start; i < node.length; i++) {
-    path.push(i)
-    let child = node.child(i)
-    let found = i == start && !atEnd ? findAfter(child, pos, path) : findLeft(child, path)
-    if (found) return found
-    path.pop()
-  }
-}
-
-function findRight(node, path) {
-  if (node.isTextblock)
-    return new Pos(path, node.maxOffset)
-  for (let i = node.length - 1; i >= 0; i--) {
-    path.push(i)
-    let found = findRight(node.child(i), path)
-    if (found) return found
-    path.pop()
-  }
-}
-
-function findBefore(node, pos, path) {
-  if (node.isTextblock) return pos
-  let atEnd = pos.path.length == path.length
-  let end = atEnd ? pos.offset - 1 : pos.path[path.length]
-  for (let i = end; i >= 0; i--) {
-    path.push(i)
-    let child = node.child(i)
-    let found = i == end && !atEnd ? findBefore(child, pos, path) : findRight(child, path)
-    if (found) return found
-    path.pop()
-  }
 }

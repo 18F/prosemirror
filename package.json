@@ -15,7 +15,6 @@
     "url": "git://github.com/prosemirror/prosemirror.git"
   },
   "dependencies": {
-    "insert-css": "^0.2.0",
     "markdown-it": "^4.0.0"
   },
   "devDependencies": {
@@ -27,8 +26,8 @@
   },
   "scripts": {
     "test": "node test/start.js",
-    "demo": "watchify -d --outfile demo/demo-built.js -t babelify demo/demo.js",
-    "browsertests": "watchify -d --outfile demo/test-built.js -t babelify demo/test.js",
+    "demo": "watchify -d -v --outfile demo/demo-built.js -t babelify demo/demo.js",
+    "browsertests": "watchify -d -v --outfile demo/test-built.js -t babelify demo/test.js",
     "dist": "babel -d dist src",
     "dist-watch": "babel -w -d dist src",
     "lint": "blint --browser --ecmaVersion 6 --forbidSemicolons src"

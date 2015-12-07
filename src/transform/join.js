@@ -9,7 +9,7 @@ defineStep("join", {
     let before = doc.path(step.from.path)
     let after = doc.path(step.to.path)
     if (step.from.offset < before.maxOffset || step.to.offset > 0 ||
-        before.type.contains != after.type.contains) return null
+        !before.type.canContainChildren(after, true)) return null
     let pFrom = step.from.path, pTo = step.to.path
     let last = pFrom.length - 1, offset = pFrom[last] + 1
     if (pFrom.length != pTo.length || pFrom.length == 0 || offset != pTo[last]) return null
@@ -17,6 +17,7 @@ defineStep("join", {
 
     let targetPath = pFrom.slice(0, last)
     let target = doc.path(targetPath), oldSize = target.length
+    if (target.type.locked) return null
     let joined = before.append(after.children)
     let copy = doc.replaceDeep(targetPath, target.splice(offset - 1, offset + 1, [joined]))
 
@@ -30,23 +31,25 @@ defineStep("join", {
   }
 })
 
+export function joinableBlocks(doc, pos) {
+  if (pos.offset == 0) return false
+  let parent = doc.path(pos.path)
+  if (parent.isTextblock || pos.offset == parent.length) return false
+  let type = parent.child(pos.offset - 1).type
+  return !type.isTextblock && type.contains && type == parent.child(pos.offset).type
+}
+
 export function joinPoint(doc, pos, dir = -1) {
-  let joinDepth = -1
-  for (let i = 0, parent = doc; i < pos.path.length; i++) {
-    let index = pos.path[i]
-    let type = parent.child(index).type
-    if (!type.block &&
-        (dir == -1 ? (index > 0 && parent.child(index - 1).type == type)
-                   : (index < parent.length - 1 && parent.child(index + 1).type == type)))
-      joinDepth = i
-    parent = parent.child(index)
+  for (;;) {
+    if (joinableBlocks(doc, pos)) return pos
+    if (pos.depth == 0) return null
+    pos = pos.shorten(null, dir < 0 ? 0 : 1)
   }
-  if (joinDepth > -1) return pos.shorten(joinDepth, dir == -1 ? 0 : 1)
 }
 
 Transform.prototype.join = function(at) {
   let parent = this.doc.path(at.path)
-  if (at.offset == 0 || at.offset == parent.length || parent.type.block) return this
+  if (at.offset == 0 || at.offset == parent.length || parent.isTextblock) return this
   this.step("join", new Pos(at.path.concat(at.offset - 1), parent.child(at.offset - 1).maxOffset),
             new Pos(at.path.concat(at.offset), 0))
   return this

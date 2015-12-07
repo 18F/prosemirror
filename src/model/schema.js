@@ -1,216 +1,345 @@
 import {BlockNode, TextblockNode, InlineNode, TextNode} from "./node"
+import {StyleMarker} from "./style"
 
 import {ProseMirrorError} from "../util/error"
 
 export class SchemaError extends ProseMirrorError {}
 
-const nodeKinds = {
-  __proto__: null,
-  block: {
-    constructor: BlockNode,
-    category: "block",
-    configurableCategory: true,
-    contains: "block",
-    configurableContains: true
-  },
-  textblock: {
-    constructor: TextblockNode,
-    category: "block",
-    configurableCategory: true,
-    contains: "inline",
-    configurableContains: false
-  },
-  inline: {
-    constructor: InlineNode,
-    category: "inline",
-    configurableCategory: false,
-    contains: null,
-    configurableContains: false
-  },
-  text: {
-    constructor: TextNode,
-    category: "inline",
-    configurableCategory: false,
-    contains: null,
-    configurableContains: false
-  }
-}
-
-function copyObj(obj) {
-  let result = Object.create(null)
-  for (let prop in obj) result[prop] = obj[prop]
-  return result
-}
-
-export class SchemaSpec {
-  constructor(nodeTypes, styles, data) {
-    this.nodeTypes = nodeTypes
-    this.styles = styles
-    this.data = data
-    this.compiled = null
+function findKinds(type, name, schema, override) {
+  function set(sub, sup) {
+    if (sub in schema.kinds) {
+      if (schema.kinds[sub] == sup) return
+      SchemaError.raise(`Inconsistent superkinds for kind ${sub}: ${sup} and ${schema.kinds[sub]}`)
+    }
+    if (schema.subKind(sub, sup))
+      SchemaError.raise(`Conflicting kind hierarchy through ${sub} and ${sup}`)
+    schema.kinds[sub] = sup
   }
 
-  updateNodes(nodes) {
-    let copy = copyObj(this.nodeTypes)
-    for (let name in nodes) {
-      let info = nodes[name]
-      if (info == null) {
-        delete copy[name]
-      } else if (info.kind) {
-        copy[name] = info
-      } else {
-        let existing = copy[name] = copyObj(copy[name])
-        for (let prop in info)
-          existing[prop] = info[prop]
+  for (let cur = type;; cur = Object.getPrototypeOf(cur)) {
+    let curKind = override != null && cur == type ? override : cur.kind
+    if (curKind != null) {
+      let [_, kind, end] = /^(.*?)(\.)?$/.exec(curKind)
+      if (kind) {
+        set(name, kind)
+        name = kind
       }
-    }
-    return new SchemaSpec(copy, this.styles, this.data)
-  }
-
-  renameNode(oldName, newName) {
-    let copy = copyObj(this.nodeTypes)
-    if (copy.hasOwnProperty(oldName)) {
-      copy[newName] = copy[oldName]
-      delete copy[oldName]
-    }
-    function renameInCategory(cat) {
-      if (!cat) return null
-      let arr = cat.split(" "), found
-      if ((found = arr.indexOf(oldName)) == -1) return null
-      arr[found] = newName
-      return arr.join(" ")
-    }
-    for (let name in copy) {
-      let info = copy[name], newCat = renameInCategory(info.category)
-      if (info.contains == oldName || newCat) {
-        info = copy[name] = copyObj(info)
-        if (info.contains == oldName) info.contains = newName
-        if (newCat) info.category = newCat
-      }
-    }
-    return new SchemaSpec(copy, this.styles, this.data)
-  }
-
-  addAttribute(filter, attrName, attrInfo) {
-    let copy = copyObj(this.nodeTypes)
-    for (let name in copy) {
-      if (typeof filter == "string" ? filter == name : filter(name, copy[name])) {
-        let info = copy[name] = copyObj(copy[name])
-        if (!info.attributes) info.attributes = {}
-        info.attributes[attrName] = attrInfo
+      if (end) {
+        set(name, null)
+        return
       }
     }
   }
-
-  updateStyles(styles) {
-    let copy = copyObj(this.styles)
-    for (let name in nodes) {
-      let info = nodes[name]
-      if (info == null) delete copy[name]
-      else copy[name] = info
-    }
-    return new SchemaSpec(this.nodeTypes, copy, this.data)
-  }
-
-  compile() {
-    return this.compiled || (this.compiled = new Schema(this))
-  }
 }
 
-class NodeType {
-  constructor(name, ctor, categories, contains, attrs, plainText, configurable, schema) {
+export class NodeType {
+  constructor(name, contains, attrs, schema) {
     this.name = name
-    this.ctor = ctor
-    this.categories = categories
     this.contains = contains
-    // FIXME make a reusable default attrs obj if all attrs have a default value
     this.attrs = attrs
-    this.plainText = plainText
-    this.configurable = configurable
     this.schema = schema
+    this.defaultAttrs = null
   }
 
-  get textblock() { return this.ctor == TextblockNode }
+  get locked() { return false }
+  get isTextblock() { return false }
 
-  canContain(type) {
-    return type.categories.indexOf(this.contains) > -1
+  get selectable() { return true }
+
+  static get kind() { return "." }
+
+  canContain(node) {
+    return this.canContainType(node.type)
+  }
+
+  canContainType(type) {
+    return this.schema.subKind(type.name, this.contains)
+  }
+
+  canContainChildren(node, liberal) {
+    if (!liberal && !this.schema.subKind(node.type.contains, this.contains)) return false
+    for (let i = 0; i < node.length; i++)
+      if (!this.canContain(node.child(i))) return false
+    return true
   }
 
   findConnection(other) {
-    if (this.canContain(other)) return []
+    if (this.canContainType(other)) return []
 
     let seen = Object.create(null)
     let active = [{from: this, via: []}]
     while (active.length) {
       let current = active.shift()
-      for (let name in this.schema.nodeTypes) {
+      for (let name in this.schema.nodes) {
         let type = this.schema.nodeType(name)
-        if (!(type.contains in seen) && current.from.canContain(type)) {
+        if (!(type.contains in seen) && current.from.canContainType(type)) {
           let via = current.via.concat(type)
-          if (type.canContain(other)) return via
+          if (type.canContainType(other)) return via
           active.push({from: type, via: via})
           seen[type.contains] = true
         }
       }
     }
   }
+
+  buildAttrs(attrs, content) {
+    if (!attrs && this.defaultAttrs) return this.defaultAttrs
+    else return buildAttrs(this.attrs, attrs, this, content)
+  }
+
+  create(attrs, content, styles) {
+    return new this.instance(this, this.buildAttrs(attrs, content), content, styles)
+  }
+
+  createAutoFill(attrs, content, styles) {
+    if ((!content || content.length == 0) && !this.canBeEmpty)
+      content = this.defaultContent()
+    return this.create(attrs, content, styles)
+  }
+
+  get canBeEmpty() { return true }
+
+  static compile(types, schema) {
+    let result = Object.create(null)
+    for (let name in types) {
+      let info = types[name]
+      let type = info.type || SchemaError.raise("Missing node type for " + name)
+      findKinds(type, name, schema, info.kind)
+      let contains = "contains" in info ? info.contains : type.contains
+      result[name] = new type(name, contains, info.attributes || type.attributes, schema)
+    }
+    for (let name in result) {
+      let contains = result[name].contains
+      if (contains && !(contains in schema.kinds))
+        SchemaError.raise("Node type " + name + " is specified to contain non-existing kind " + contains)
+    }
+    if (!result.doc) SchemaError.raise("Every schema needs a 'doc' type")
+    if (!result.text) SchemaError.raise("Every schema needs a 'text' type")
+
+    for (let name in types)
+      types[name].defaultAttrs = getDefaultAttrs(types[name].attrs)
+    return result
+  }
+
+  static register(prop, value) {
+    ;(this.prototype[prop] || (this.prototype[prop] = [])).push(value)
+  }
+}
+NodeType.attributes = {}
+
+export class Block extends NodeType {
+  get instance() { return BlockNode }
+  static get contains() { return "block" }
+  static get kind() { return "block." }
+  get isBlock() { return true }
+
+  get canBeEmpty() { return this.contains == null }
+
+  defaultContent() {
+    let inner = this.schema.defaultTextblockType().create()
+    let conn = this.findConnection(inner.type)
+    if (!conn) SchemaError.raise("Can't create default content for " + this.name)
+    for (let i = conn.length - 1; i >= 0; i--) inner = conn[i].create(null, [inner])
+    return [inner]
+  }
 }
 
-function compileNodeTypes(types, schema) {
+export class Textblock extends Block {
+  get instance() { return TextblockNode }
+  static get contains() { return "inline" }
+  get containsStyles() { return true }
+  get isTextblock() { return true }
+
+  canContain(node) {
+    return super.canContain(node) && node.styles.every(s => this.canContainStyle(s))
+  }
+
+  canContainStyle(type) {
+    let contains = this.containsStyles
+    if (contains === true) return true
+    if (contains) for (let i = 0; i < contains.length; i++)
+      if (contains[i] == type.name) return true
+    return false
+  }
+
+  get canBeEmpty() { return true }
+}
+
+export class Inline extends NodeType {
+  get instance() { return InlineNode }
+  static get contains() { return null }
+  static get kind() { return "inline." }
+}
+
+export class Text extends Inline {
+  get instance() { return TextNode }
+  get selectable() { return false }
+}
+
+// Attribute descriptors
+
+export class Attribute {
+  constructor(options = {}) {
+    this.default = options.default
+    this.compute = options.compute
+  }
+}
+
+// Styles
+
+export class StyleType {
+  constructor(name, attrs, rank, schema) {
+    this.name = name
+    this.attrs = attrs
+    this.rank = rank
+    this.schema = schema
+    let defaults = getDefaultAttrs(this.attrs)
+    this.instance = defaults && new StyleMarker(this, defaults)
+  }
+
+  static get rank() { return 50 }
+
+  create(attrs) {
+    if (!attrs && this.instance) return this.instance
+    return new StyleMarker(this, buildAttrs(this.attrs, attrs, this))
+  }
+
+  static getOrder(styles) {
+    let sorted = []
+    for (let name in styles) sorted.push({name, rank: styles[name].type.rank})
+    sorted.sort((a, b) => a.rank - b.rank)
+    let ranks = Object.create(null)
+    for (let i = 0; i < sorted.length; i++) ranks[sorted[i].name] = i
+    return ranks
+  }
+
+  static compile(styles, schema) {
+    let order = this.getOrder(styles)
+    let result = Object.create(null)
+    for (let name in styles) {
+      let info = styles[name]
+      let attrs = info.attributes || info.type.attributes
+      result[name] = new info.type(name, attrs, order[name], schema)
+    }
+    return result
+  }
+
+  static register(prop, value) {
+    ;(this.prototype[prop] || (this.prototype[prop] = [])).push(value)
+  }
+}
+StyleType.attributes = {}
+
+// Schema specifications are data structures that specify a schema --
+// a set of node types, their names, attributes, and nesting behavior.
+
+function copyObj(obj, f) {
   let result = Object.create(null)
-  let categoriesSeen = Object.create(null)
-  for (let name in types) {
-    let info = types[name]
-    let kind = nodeKinds[info.kind] || SchemaError.raise("Unsupported node type: " + info.kind)
-    if (info.category && info.category != kind.category && !kind.configurableCategory)
-      SchemaError.raise("Nodes of kind " + info.kind + " must have category " + kind.category)
-    let categories = info.category ? info.category.split(" ") : [kind.category]
-    categories.forEach(n => categoriesSeen[n] = true)
-    if ("contains" in info && info.contains != kind.contains && !kind.configurableContains)
-      SchemaError.raise("Nodes of kind " + info.kind + " must contain " + kind.contains)
-    let contains = "contains" in info ? info.contains : kind.contains
-    result[name] = new NodeType(name, kind.constructor, categories, contains,
-                                info.attributes || nullAttrs, // FIXME
-                                info.plainText === true,
-                                info.configurable === false,
-                                schema)
-  }
-  for (let name in result) {
-    let contains = result[name].contains
-    if (contains && !(contains in categoriesSeen) && !(contains in result))
-      SchemaError.raise("Node type " + name + " is specified to contain non-existing category " + contains)
-  }
-  if (!result.doc) SchemaError.raise("Every schema needs a 'doc' type")
-  if (!result.text) SchemaError.raise("Every schema needs a 'text' type")
+  for (let prop in obj) result[prop] = f ? f(obj[prop]) : obj[prop]
   return result
 }
 
+function ensureWrapped(obj) {
+  return obj instanceof Function ? {type: obj} : obj
+}
+
+function overlayObj(obj, overlay) {
+  let copy = copyObj(obj)
+  for (let name in overlay) {
+    let info = ensureWrapped(overlay[name])
+    if (info == null) {
+      delete copy[name]
+    } else if (info.type) {
+      copy[name] = info
+    } else {
+      let existing = copy[name] = copyObj(copy[name])
+      for (let prop in info)
+        existing[prop] = info[prop]
+    }
+  }
+  return copy
+}
+
+export class SchemaSpec {
+  constructor(nodes, styles) {
+    this.nodes = nodes ? copyObj(nodes, ensureWrapped) : Object.create(null)
+    this.styles = styles ? copyObj(styles, ensureWrapped) : Object.create(null)
+  }
+
+  updateNodes(nodes) {
+    return new SchemaSpec(overlayObj(this.nodes, nodes), this.styles)
+  }
+
+  addAttribute(filter, attrName, attrInfo) {
+    let copy = copyObj(this.nodes)
+    for (let name in copy) {
+      if (typeof filter == "string" ? filter == name :
+          typeof filter == "function" ? filter(name, copy[name]) :
+          filter ? filter == copy[name] : true) {
+        let info = copy[name] = copyObj(copy[name])
+        if (!info.attributes) info.attributes = copyObj(info.type.attributes)
+        info.attributes[attrName] = attrInfo
+      }
+    }
+    return new SchemaSpec(copy, this.styles)
+  }
+
+  updateStyles(styles) {
+    return new SchemaSpec(this.nodes, overlayObj(this.styles, styles))
+  }
+}
+
+// For node types where all attrs have a default value (or which don't
+// have any attributes), build up a single reusable default attribute
+// object, and use it for all nodes that don't specify specific
+// attributes.
+
+function getDefaultAttrs(attrs) {
+  let defaults = Object.create(null)
+  for (let attrName in attrs) {
+    let attr = attrs[attrName]
+    if (attr.default == null) return null
+    defaults[attrName] = attr.default
+  }
+  return defaults
+}
+
+function buildAttrs(attrSpec, attrs, arg1, arg2) {
+  let built = Object.create(null)
+  for (let name in attrSpec) {
+    let value = attrs && attrs[name]
+    if (value == null) {
+      let attr = attrSpec[name]
+      if (attr.default != null)
+        value = attr.default
+      else if (attr.compute)
+        value = attr.compute(arg1, arg2)
+      else
+        SchemaError.raise("No value supplied for attribute " + name)
+    }
+    built[name] = value
+  }
+  return built
+}
+
+/**
+ * Document schema class.
+ */
 export class Schema {
-  constructor(spec) {
+  constructor(spec, styles) {
+    if (!(spec instanceof SchemaSpec)) spec = new SchemaSpec(spec, styles)
     this.spec = spec
-    this.nodeTypes = compileNodeTypes(spec.nodeTypes, this)
-    this.styles = spec.styles // FIXME
-    this.data = spec.data
+    this.kinds = Object.create(null)
+    this.nodes = NodeType.compile(spec.nodes, this)
+    this.styles = StyleType.compile(spec.styles, this)
+    this.cached = Object.create(null)
+
     this.node = this.node.bind(this)
     this.text = this.text.bind(this)
     this.nodeFromJSON = this.nodeFromJSON.bind(this)
+    this.styleFromJSON = this.styleFromJSON.bind(this)
   }
 
-  buildAttrs(type, attrs) {
-    let built = Object.create(null)
-    for (let name in type.attrs) {
-      let value = attrs && attrs[name]
-      if (value == null) {
-        value = type.attrs[name].default
-        if (value == null)
-          SchemaError.raise("No value supplied for attribute " + name + " on node " + type.name)
-      }
-      built[name] = value
-    }
-    return built
-  }
-
-  // FIXME provide variant that doesn't check/fill in type and attrs?
   node(type, attrs, content, styles) {
     if (typeof type == "string")
       type = this.nodeType(type)
@@ -219,104 +348,49 @@ export class Schema {
     else if (type.schema != this)
       SchemaError.raise("Node type from different schema used (" + type.name + ")")
 
-    return new type.ctor(type, this.buildAttrs(type, attrs), content, styles)
+    return type.create(attrs, content, styles)
   }
 
   text(text, styles) {
-    return new TextNode(this.nodeTypes.text, this.buildAttrs(this.nodeTypes.text), text, styles)
+    return this.nodes.text.create(null, text, styles)
+  }
+
+  defaultTextblockType() {
+    let cached = this.cached.defaultTextblockType
+    if (cached !== undefined) return cached
+    for (let name in this.nodes) {
+      if (this.nodes[name].defaultTextblock)
+        return this.cached.defaultTextblockType = this.nodes[name]
+    }
+    return this.cached.defaultTextblockType = null
+  }
+
+  style(name, attrs) {
+    let spec = this.styles[name] || SchemaError.raise("No style named " + name)
+    return spec.create(attrs)
   }
 
   nodeFromJSON(json) {
     let type = this.nodeType(json.type)
-    return new type.ctor(type, this.buildAttrs(type, maybeNull(json.attrs)),
-                         json.text || (json.content && json.content.map(this.nodeFromJSON)),
-                         json.styles)
+    return type.create(json.attrs,
+                       json.text || (json.content && json.content.map(this.nodeFromJSON)),
+                       json.styles && json.styles.map(this.styleFromJSON))
+  }
+
+  styleFromJSON(json) {
+    if (typeof json == "string") return this.style(json)
+    return this.style(json._, json)
   }
 
   nodeType(name) {
-    return this.nodeTypes[name] || SchemaError.raise("Unknown node type: " + name)
+    return this.nodes[name] || SchemaError.raise("Unknown node type: " + name)
+  }
+
+  subKind(sub, sup) {
+    for (;;) {
+      if (sub == sup) return true
+      sub = this.kinds[sub]
+      if (!sub) return false
+    }
   }
 }
-
-const nullAttrs = {}
-
-function maybeNull(obj) {
-  if (!obj) return nullAttrs
-  for (let _prop in obj) return obj
-  return nullAttrs
-}
-
-export const baseSchemaSpec = new SchemaSpec({
-  doc: {
-    kind: "block",
-  },
-  paragraph: {
-    kind: "textblock"
-  },
-  text: {
-    kind: "text"
-  }
-}, {
-  code: {},
-  em: {},
-  strong: {},
-  link: {
-    attributes: {
-      href: {},
-      title: {default: ""}
-    }
-  }
-}, {})
-
-export const defaultSchemaSpec = baseSchemaSpec.updateNodes({
-  blockquote: {
-    kind: "block"
-  },
-  ordered_list: {
-    kind: "block",
-    contains: "list_item",
-    attributes: {
-      order: {default: "1"}
-    }
-  },
-  bullet_list: {
-    kind: "block",
-    contains: "list_item"
-  },
-  list_item: {
-    kind: "block",
-    category: "list_item"
-  },
-  horizontal_rule: {
-    kind: "block",
-    contains: null
-  },
-
-  heading: {
-    kind: "textblock",
-    attributes: {
-      level: {default: "1"}
-    }
-  },
-  code_block: {
-    kind: "textblock",
-    attributes: {
-      params: {default: ""}
-    },
-    plainText: true
-  },
-
-  image: {
-    kind: "inline",
-    attributes: {
-      src: {},
-      title: {default: ""},
-      alt: {default: ""}
-    }
-  },
-  hard_break: {
-    kind: "inline"
-  }
-})
-
-export const defaultSchema = defaultSchemaSpec.compile()
